@@ -1,3 +1,0 @@
-/Users/lev/renderer/build/CMakeFiles/renderer.dir
-/Users/lev/renderer/build/CMakeFiles/edit_cache.dir
-/Users/lev/renderer/build/CMakeFiles/rebuild_cache.dir
