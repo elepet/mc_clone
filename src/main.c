@@ -193,18 +193,23 @@ int main() {
 	float rotateVec[] = {1.0, 1.0, 1.0};
 	rmlNormaliseVec(rotateVec);
 	float scaleMat[size][size];
-	rmlScaleMat(scaleVec, scaleMat);
+	rmlScale(scaleVec, scaleMat);
 	float translateMat[size][size];
-	rmlTranslateMat(translateVec, translateMat);
+	rmlTranslate(translateVec, translateMat);
 	float rotateMat[size][size];
-	rmlRotateMat(rotateVec, M_PI/3, rotateMat); 
+	rmlRotate(rotateVec, M_PI/3, rotateMat); 
 	float transformMat[size][size];
 	rmlDot(rotateMat,scaleMat,transformMat); 
 	rmlDot(translateMat,transformMat,transformMat);
 	int w, h;
 	glfwGetWindowSize(window, &w, &h); 
 	float projectMat[size][size];
-	rmlProjectMat(h, w, M_PI/2, 40, 1, projectMat);
+
+	float angleOfView = 60; 
+	float n = 0.1; 
+	float f = 100; 
+	rmlProject(angleOfView, w, h, n, f, projectMat);
+	
 	rmlDot(projectMat,transformMat,transformMat);	
 
 	//glViewport(-1,-1,w,h);
@@ -219,9 +224,9 @@ int main() {
 
 		glUseProgram(shaderProgram);
 
-		rmlRotateMat(rotateVec, (float)glfwGetTime(),  rotateMat);
+		rmlRotate(rotateVec, (float)glfwGetTime(),  rotateMat);
 		glfwGetWindowSize(window, &w, &h);
-		rmlProjectMat(h, w, M_PI/2, 40, 1, projectMat);
+		rmlProject(angleOfView, w, h, n, f, projectMat);
 		rmlDot(rotateMat, scaleMat, transformMat);
 		rmlDot(translateMat,transformMat,transformMat);
 		rmlDot(projectMat,transformMat,transformMat);
