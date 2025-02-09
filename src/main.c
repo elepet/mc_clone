@@ -11,14 +11,16 @@
 #include <math.h>
 #include <stdbool.h>
 
+const unsigned int SCR_WIDTH = 800;
+const unsigned int SCR_HEIGHT = 600;
+
+const unsigned int size = 4;
+
 #include "original/helpers.h"
 #include "original/rml.h"
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow *window);
-
-const unsigned int SCR_WIDTH = 800;
-const unsigned int SCR_HEIGHT = 600;
 
 int main() {
 	glfwInit();
@@ -84,15 +86,15 @@ int main() {
 	}
 	glDeleteShader(vertexShader);
 	glDeleteShader(fragmentShader);
-
-//	float vertices[] = {
-//		// positions          // colors           // texture coords
-//		0.5f,  0.5f, 0.0f,   1.0f, 0.0f, 0.0f,   1.0f, 1.0f, // top right
-//		0.5f, -0.5f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, // bottom right
-//		-0.5f, -0.5f, 0.0f,   0.0f, 0.0f, 1.0f,   0.0f, 0.0f, // bottom left
-//		-0.5f,  0.5f, 0.0f,   1.0f, 1.0f, 0.0f,   0.0f, 1.0f  // top left 
-//	};
-
+/*
+	float vertices[] = {
+		// positions          // colors           // texture coords
+		0.5f,  0.5f, 0.0f,   1.0f, 0.0f, 0.0f,   1.0f, 1.0f, // top right
+		0.5f, -0.5f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, // bottom right
+		-0.5f, -0.5f, 0.0f,   0.0f, 0.0f, 1.0f,   0.0f, 0.0f, // bottom left
+		-0.5f,  0.5f, 0.0f,   1.0f, 1.0f, 0.0f,   0.0f, 1.0f  // top left 
+	};
+*/
 	float vertices[] = {
 		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
 		0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
@@ -186,27 +188,24 @@ int main() {
 	stbi_image_free(data);
 
 	//matrix setup
-	rmlVector* scaleVec = rmlAllocateVector(3);
-	rmlFillVector(0.5, scaleVec);
-	rmlVector* translateVec = rmlAllocateVector(3);
-	translateVec->val[2] = 2.0;
-	rmlVector* rotateVec = rmlAllocateVector(3);
-	rmlFillVector(1.0, rotateVec);
-	rmlNormaliseVector(rotateVec);
-	rmlMatrix* scaleMat = rmlAllocateScalingMatrix(scaleVec);
-	rmlMatrix* translateMat = rmlAllocateTranslationMatrix(translateVec);
-	rmlMatrix* rotateMat = rmlAllocateRotationMatrix(rotateVec, M_PI / 3); 
-	rmlMatrix* transformMat = rmlAllocateDotMatrix(rotateMat,scaleMat); 
-	rmlModifyDotMatrix(translateMat,transformMat,transformMat);
+	float scaleVec[] = {0.5, 0.5, 0.5};
+	float translateVec[] = {0.0, 0.0, -2.0};
+	float rotateVec[] = {1.0, 1.0, 1.0};
+	rmlNormaliseVec(rotateVec);
+	float scaleMat[size][size];
+	rmlScaleMat(scaleVec, scaleMat);
+	float translateMat[size][size];
+	rmlTranslateMat(translateVec, translateMat);
+	float rotateMat[size][size];
+	rmlRotateMat(rotateVec, M_PI/3, rotateMat); 
+	float transformMat[size][size];
+	rmlDot(rotateMat,scaleMat,transformMat); 
+	rmlDot(translateMat,transformMat,transformMat);
 	int w, h;
 	glfwGetWindowSize(window, &w, &h); 
-	float angleOfView = 90;
-	float near = 0.1;
-	float far = 100;
-	float imageAspectRatio = (float)w / (float)h;
-	//rmlMatrix* projectMat = rmlAllocateProjectionMatrix(angleOfView, imageAspectRatio, near, far);
-	rmlMatrix* projectMat = rmlAllocateProjectionMatrix(h, w, M_PI/2, 1, 40);
-	rmlModifyDotMatrix(projectMat,transformMat,transformMat);	
+	float projectMat[size][size];
+	rmlProjectMat(h, w, M_PI/2, 40, 1, projectMat);
+	rmlDot(projectMat,transformMat,transformMat);	
 
 	//glViewport(-1,-1,w,h);
 
@@ -220,18 +219,15 @@ int main() {
 
 		glUseProgram(shaderProgram);
 
-		rmlModifyRotationMatrix(rotateVec, (float)glfwGetTime(),  rotateMat);
+		rmlRotateMat(rotateVec, (float)glfwGetTime(),  rotateMat);
 		glfwGetWindowSize(window, &w, &h);
-		imageAspectRatio = (float)w / (float)h; 
-		//rmlModifyProjectionMatrix(angleOfView, imageAspectRatio, near, far, projectMat);
-		rmlModifyProjectionMatrix(h, w, M_PI/2, 1, 40, projectMat);
-		rmlModifyDotMatrix(rotateMat, scaleMat, transformMat);
-		rmlModifyDotMatrix(translateMat,transformMat,transformMat);
-		rmlModifyDotMatrix(projectMat,transformMat,transformMat);
-		rmlPrintMatrix(transformMat);
+		rmlProjectMat(h, w, M_PI/2, 40, 1, projectMat);
+		rmlDot(rotateMat, scaleMat, transformMat);
+		rmlDot(translateMat,transformMat,transformMat);
+		rmlDot(projectMat,transformMat,transformMat);
 
 		unsigned int transformLoc = glGetUniformLocation(shaderProgram, "transform");
-		glUniformMatrix4fv(transformLoc, 1, GL_TRUE, transformMat->val[0]);
+		glUniformMatrix4fv(transformLoc, 1, GL_TRUE, &transformMat[0]);
 
 		glBindVertexArray(VAO);
 		glDrawArrays(GL_TRIANGLES, 0, 36);
@@ -253,15 +249,6 @@ int main() {
 	}
 
 	glfwTerminate();
-
-	rmlFreeVector(scaleVec);	
-	rmlFreeVector(translateVec);	
-	rmlFreeVector(rotateVec);	
-	rmlFreeMatrix(scaleMat);
-	rmlFreeMatrix(translateMat);
-	rmlFreeMatrix(rotateMat);
-	rmlFreeMatrix(transformMat);
-	rmlFreeMatrix(projectMat);
 
 	return 0;
 }
