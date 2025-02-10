@@ -1,3 +1,5 @@
+//TODO: model importing, culling, camera+light, pbr
+
 #define GL_SILENCE_DEPRECATION
 
 #define GLAD_GL_IMPLEMENTATION
@@ -21,6 +23,7 @@ const unsigned int size = 4;
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 void processInput(GLFWwindow *window);
+void showDelta(GLFWwindow* window, double* lastTime);
 
 int main() {
 	glfwInit();
@@ -187,7 +190,7 @@ int main() {
 	}
 	stbi_image_free(data);
 
-	//matrix setup
+	//Matrix setup
 	float scaleVec[] = {0.5, 0.5, 0.5};
 	float translateVec[] = {0.0, 0.0, -2.0};
 	float rotateVec[] = {1.0, 1.0, 1.0};
@@ -204,20 +207,23 @@ int main() {
 	int w, h;
 	glfwGetWindowSize(window, &w, &h); 
 	float projectMat[size][size];
-
 	float angleOfView = 60; 
 	float n = 0.1; 
 	float f = 100; 
 	rmlProject(angleOfView, w, h, n, f, projectMat);
-	
 	rmlDot(projectMat,transformMat,transformMat);	
-
 	//glViewport(-1,-1,w,h);
+
+
+	//Time setup
+	double lastTime = glfwGetTime();
 
 	//Render loop.
 	while (!glfwWindowShouldClose(window))
 	{
 		processInput(window);
+
+		showDelta(window, &lastTime);
 
 		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -267,4 +273,14 @@ void processInput(GLFWwindow *window)
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)
 {
 	glViewport(0, 0, width, height);
+}
+
+//Frametime in milliseconds.
+void showDelta(GLFWwindow* window, double* lastTime) {
+	double currentTime = glfwGetTime();
+	double delta = (currentTime - *lastTime) * 1000;
+	char str[80];
+	sprintf(str, "Renderer | %.2fms/frame", delta);
+	glfwSetWindowTitle(window, str);
+	*lastTime = currentTime;
 }

@@ -1,4 +1,7 @@
 //Renderer Matrix Library
+//- Only defined for 4*4 matrices and 4*1 vectors (3d).
+//- Matrices are row major 2d arrays. Vectors are 1d arrays.
+//- To use with OpenGL, in the render loop: glUniformMatrix4fv(transformLoc, 1, GL_TRUE, &transformMat[0]);
 //TODO: quaternions, error handling, performance improvements
 
 #include <stdio.h>
