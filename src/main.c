@@ -1,4 +1,4 @@
-//TODO: model importing, culling, camera, pbr
+//TODO: model importing, culling, camera, multiple objects, pbr
 
 #define GL_SILENCE_DEPRECATION
 
@@ -23,7 +23,7 @@ const unsigned int size = 4;
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 static void cursor_position_callback(GLFWwindow* window, double xpos, double ypos);
-void processInput(GLFWwindow *window, float vel[size - 1], double* lastXPos, double* lastYPos);
+void processInput(GLFWwindow *window, float vel[size - 1], double* lastXPos, double* lastYPos, float rot[size - 2]);
 void showDelta(GLFWwindow* window, double* lastTime);
 
 int main() {
@@ -98,59 +98,7 @@ int main() {
 	}
 	glDeleteShader(vertexShader);
 	glDeleteShader(fragmentShader);
-/*
-	float vertices[] = {
-		// positions          // colors           // texture coords
-		0.5f,  0.5f, 0.0f,   1.0f, 0.0f, 0.0f,   1.0f, 1.0f, // top right
-		0.5f, -0.5f, 0.0f,   0.0f, 1.0f, 0.0f,   1.0f, 0.0f, // bottom right
-		-0.5f, -0.5f, 0.0f,   0.0f, 0.0f, 1.0f,   0.0f, 0.0f, // bottom left
-		-0.5f,  0.5f, 0.0f,   1.0f, 1.0f, 0.0f,   0.0f, 1.0f  // top left 
-	};
 
-	float vertices[] = {
-		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
-		0.5f, -0.5f, -0.5f,  1.0f, 0.0f,
-		0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
-		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f,
-
-		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-		0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
-		0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
-		0.5f,  0.5f,  0.5f,  1.0f, 1.0f,
-		-0.5f,  0.5f,  0.5f,  0.0f, 1.0f,
-		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-
-		-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-		-0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-		-0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-
-		0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-		0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-		0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-
-		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-		0.5f, -0.5f, -0.5f,  1.0f, 1.0f,
-		0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
-		0.5f, -0.5f,  0.5f,  1.0f, 0.0f,
-		-0.5f, -0.5f,  0.5f,  0.0f, 0.0f,
-		-0.5f, -0.5f, -0.5f,  0.0f, 1.0f,
-
-		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f,
-		0.5f,  0.5f, -0.5f,  1.0f, 1.0f,
-		0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-		0.5f,  0.5f,  0.5f,  1.0f, 0.0f,
-		-0.5f,  0.5f,  0.5f,  0.0f, 0.0f,
-		-0.5f,  0.5f, -0.5f,  0.0f, 1.0f
-	};
-*/
 	float vertices[] = { //CCW winding
 		// Back face
 		-0.5f, -0.5f, -0.5f,  0.0f, 0.0f, // Bottom-left
@@ -245,15 +193,19 @@ int main() {
 
 	//Matrix setup
 	float scaleVec[] = {0.5, 0.5, 0.5};
-	float translateVec[] = {0.0, 0.0, -2.0};
-	float rotateVec[] = {1.0, 1.0, 1.0};
-	rmlNormaliseVec(rotateVec);
+	float translateVec1[] = {0.0, 0.0, -2.0};
+	float translateVec2[] = {2.0, 0.0, -2.0};
+	float rotateVecX[] = {1, 0, 0};
+	float rotateVecY[] = {0, 1, 0};
+	float rotateVecZ[] = {0, 0, 1};
 	float scaleMat[size][size];
 	rmlScale(scaleVec, scaleMat);
 	float translateMat[size][size];
-	rmlTranslate(translateVec, translateMat);
+	rmlTranslate(translateVec1, translateMat);
 	float rotateMat[size][size];
-	rmlRotate(rotateVec, M_PI/3, rotateMat); 
+	float rotateMatX[size][size];
+	float rotateMatY[size][size];
+	float rotateMatZ[size][size];
 	float transformMat[size][size];
 	rmlDot(rotateMat,scaleMat,transformMat); 
 	rmlDot(translateMat,transformMat,transformMat);
@@ -273,18 +225,19 @@ int main() {
 
 	//Camera control setup
 	float vel[] = {0, 0, 0};
+	float rot[] = {0, 0, 0};
 	double lastXPos, lastYPos;
 	glfwGetCursorPos(window, &lastXPos, &lastYPos);
 	
 	//Render loop.
 	while (!glfwWindowShouldClose(window))
 	{
-		processInput(window, vel, &lastXPos, &lastYPos);
+		processInput(window, vel, &lastXPos, &lastYPos, rot);
 
-		translateVec[0] += vel[0];
-		translateVec[1] += vel[1];
-		translateVec[2] += vel[2];
-		rmlTranslate(translateVec, translateMat);
+		translateVec1[0] += vel[0];
+		translateVec1[1] += vel[1];
+		translateVec1[2] += vel[2];
+		rmlTranslate(translateVec1, translateMat);
 
 		showDelta(window, &lastTime);
 
@@ -293,10 +246,15 @@ int main() {
 
 		glUseProgram(shaderProgram);
 
-		rmlRotate(rotateVec, (float)glfwGetTime(),  rotateMat);
+		//rmlRotate(rotateVec, (float)glfwGetTime(),  rotateMat);
+		rmlRotate(rotateVecX, rot[0],  rotateMatX);
+		rmlRotate(rotateVecY, rot[1],  rotateMatY);
+		rmlRotate(rotateVecZ, rot[2],  rotateMatZ);
 		glfwGetWindowSize(window, &w, &h);
 		rmlProject(angleOfView, w, h, n, f, projectMat);
-		rmlDot(rotateMat, scaleMat, transformMat);
+		rmlDot(rotateMatX, scaleMat, transformMat);
+		rmlDot(rotateMatY, transformMat, transformMat);
+		rmlDot(rotateMatZ, transformMat, transformMat);
 		rmlDot(translateMat,transformMat,transformMat);
 		rmlDot(projectMat,transformMat,transformMat);
 
@@ -327,7 +285,7 @@ int main() {
 	return 0;
 }
 
-void processInput(GLFWwindow *window, float vel[size - 1], double* lastXPos, double* lastYPos)
+void processInput(GLFWwindow *window, float vel[size - 1], double* lastXPos, double* lastYPos, float rot[size - 2])
 {
 	//Close window
 	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
@@ -347,6 +305,21 @@ void processInput(GLFWwindow *window, float vel[size - 1], double* lastXPos, dou
 	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) vel[2] = speed;
 	else if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) vel[2] = -speed;
 	else vel[2] = 0;
+
+	//Mouse camera control
+	double xpos, ypos;
+	glfwGetCursorPos(window, &xpos, &ypos);
+	//printf("xpos: %f	ypos: %f\n", xpos, ypos);
+
+	//speed = 0.001;
+	if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS) rot[0] += speed;
+	else if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS) rot[0] -= speed;
+
+	if (glfwGetKey(window, GLFW_KEY_J) == GLFW_PRESS) rot[1] += speed;
+	else if (glfwGetKey(window, GLFW_KEY_L) == GLFW_PRESS) rot[1] -= speed;
+
+	if (glfwGetKey(window, GLFW_KEY_N) == GLFW_PRESS) rot[2] += speed;
+	else if (glfwGetKey(window, GLFW_KEY_M) == GLFW_PRESS) rot[2] -= speed;
 }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height)

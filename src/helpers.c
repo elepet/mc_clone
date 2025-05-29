@@ -41,3 +41,4 @@ const char* rcGetShaderSource(const char* name) {
 
 	return text; 
 }
+
