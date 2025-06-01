@@ -8,7 +8,11 @@ in vec2 TexCoord;
 
 uniform sampler2D ourTexture;
 
+//in vec3 textureDir;
+//uniform samplerCube cubemap;
+
 void main()
 {
 	FragColor = texture(ourTexture, TexCoord);
+	//FragColor = texture(cubemap, TexCoord);
 }

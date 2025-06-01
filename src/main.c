@@ -1,4 +1,4 @@
-// TODO: model importing, culling, camera, multiple objects, pbr.
+// TODO: chunks, texture atlas, culling, up/down camera, pbr.
 
 #define GL_SILENCE_DEPRECATION
 #define GLAD_GL_IMPLEMENTATION
@@ -14,6 +14,18 @@
 // Settings.
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
+
+const unsigned int chunkSize = 10;
+
+bool menu = false;
+bool menuLastState = false;
+bool menuThisState = false;
+
+bool wire = false;
+bool wireLastState = false;
+bool wireThisState = false;
+
+unsigned int VBO, VAO;//, EBO;
 
 double lastTime = 0.0f;
 mat4 model, view, proj, mvp;
@@ -50,6 +62,9 @@ static void mouse_callback(GLFWwindow* window, double xpos, double ypos);
 void processInput(GLFWwindow *window);
 void showDeltaTime(GLFWwindow* window);
 const char* getShaderSource(const char* name);
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
+void addChunk(float* dst, unsigned int chunkIndex, unsigned int offset[3]);
+void addCube(float* dst, float offset[3], int index);
 
 int main() {
 	glfwInit();
@@ -71,9 +86,10 @@ int main() {
 	glfwMakeContextCurrent(window);
 	glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 	glfwSetCursorPosCallback(window, mouse_callback);
+	glfwSetKeyCallback(window, key_callback);
 	glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
-	int version = gladLoadGL(glfwGetProcAddress);
+	gladLoadGL(glfwGetProcAddress);
 
 	glEnable(GL_DEPTH_TEST);
 
@@ -98,7 +114,7 @@ int main() {
 	if (!success)
 	{
 		glGetShaderInfoLog(vertexShader, 512, NULL, infoLog);
-		printf("ERROR::SHADER::VERTEX::COMPILATION_FAILED\n%s", infoLog);
+		printf("Vertex: ERROR::SHADER::VERTEX::COMPILATION_FAILED %s\n", infoLog);
 	}
 	unsigned int fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
 	glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
@@ -120,12 +136,11 @@ int main() {
 	glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
 	if (!success) {
 		glGetProgramInfoLog(shaderProgram, 512, NULL, infoLog);
-		printf("ERROR::SHADER::PROGRAM::LINKING_FAILED\n%s", infoLog);
+		printf("Fragment: ERROR::SHADER::PROGRAM::LINKING_FAILED %s\n", infoLog);
 	}
 	glDeleteShader(vertexShader);
 	glDeleteShader(fragmentShader);
 
-	unsigned int VBO, VAO;//, EBO;
 	glGenVertexArrays(1, &VAO);
 	glGenBuffers(1, &VBO);
 	//glGenBuffers(1, &EBO);
@@ -145,21 +160,20 @@ int main() {
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
 	glEnableVertexAttribArray(1);
 
-	//glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-
 	// Texture setup.
 	unsigned int texture;
+
 	glGenTextures(1, &texture);
 	glBindTexture(GL_TEXTURE_2D, texture);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	int width, height, nrChannels;
-	unsigned char *data = stbi_load("../media/container.jpg", &width, &height, &nrChannels, 0);
+	unsigned char *data = stbi_load("../media/dirt.png", &width, &height, &nrChannels, 0);
 	if (data)
 	{
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
 		glGenerateMipmap(GL_TEXTURE_2D);
 	}
 	else
@@ -178,34 +192,51 @@ int main() {
 	glm_lookat(cameraPos, cameraDirection, cameraUp, view);
 	// Projection: camera -> screen.
 	float fov = glm_rad(45.0f);
-	float aspect = (float)SCR_WIDTH / (float)SCR_HEIGHT;
+	int w, h;
+	glfwGetWindowSize(window, &w, &h);
+	float aspect = (float)w / (float)h;
 	float near = 0.1f;
 	float far = 100.0f;
 	glm_perspective(fov, aspect, near, far, proj);
 	// mvp = proj * view * model.
 //	glm_mat4_mul(view, model, mvp);
 //	glm_mat4_mul(proj, mvp, mvp); 
-	// Other.
-	vec3 xAxis = {1.0f, 0.0f, 0.0f};
-	vec3 yAxis = {0.0f, 1.0f, 0.0f};
-	vec3 zAxis = {0.0f, 0.0f, 1.0f};
 
 	// Time setup.
 	lastTime = glfwGetTime();
 
 	// Camera control setup.
-	float vel[] = {0, 0, 0};
-	float rot[] = {0, 0, 0};
 	glfwSetCursorPosCallback(window, mouse_callback);
 	
+	// Mesh batching setup.
+	unsigned int chunksInAxis[3] = {10, 2, 10};
+	unsigned int numChunks = chunksInAxis[0] * chunksInAxis[1] * chunksInAxis[2];
+	unsigned int blocksPerChunk = chunkSize * chunkSize * chunkSize;
+	unsigned int totalVerticesSize = sizeof(float) * VERTEX_SIZE * VERTICES_PER_CUBE * blocksPerChunk * numChunks;
+	float* combinedVertices = malloc(totalVerticesSize);
+	for (unsigned int cx = 0; cx < chunksInAxis[0]; cx++) {
+		for (unsigned int cy = 0; cy < chunksInAxis[1]; cy++) {
+			for (unsigned int cz = 0; cz < chunksInAxis[2]; cz++) {
+				unsigned int chunkIndex = cx * chunksInAxis[1] * chunksInAxis[2] + cy * chunksInAxis[2] + cz;
+				unsigned int offset[3] = {cx, cy, cz};
+				addChunk(combinedVertices, chunkIndex, offset);
+			}
+		}
+	}
+
+	glBindBuffer(GL_ARRAY_BUFFER, VBO);
+	glBufferData(GL_ARRAY_BUFFER, totalVerticesSize, combinedVertices, GL_STATIC_DRAW);
+	free(combinedVertices);
+
 	// Render loop.
-	while (!glfwWindowShouldClose(window))
-	{
+	while (!glfwWindowShouldClose(window)) {
 		processInput(window);
 
 		showDeltaTime(window);
 
-		glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+		if (menu) glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+		else glClearColor(0.4f, 0.65f, 1.0f, 0.8f);
+
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 		glUseProgram(shaderProgram);
@@ -214,23 +245,18 @@ int main() {
 		glUniformMatrix4fv(viewLoc, 1, GL_FALSE, (const float*)view);
 		unsigned int projLoc = glGetUniformLocation(shaderProgram, "proj");
 		glUniformMatrix4fv(projLoc, 1, GL_FALSE, (const float*)proj);
+		unsigned int modelLoc = glGetUniformLocation(shaderProgram, "model");
+		glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const float*)model);
 
 		glBindVertexArray(VAO);
-		for(unsigned int i = 0; i < 10; i++) {
-			mat4 model;
-			glm_mat4_identity(model);
-			glm_translate(model, cubePos[i]);
-			glm_rotate(model, (float)glfwGetTime(), yAxis);
-			//glm_mat4_mul(view, model, mvp);
-			//glm_mat4_mul(proj, mvp, mvp);
 
-			unsigned int modelLoc = glGetUniformLocation(shaderProgram, "model");
-			glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const float*)model);
+		if (wire) glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+		else glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
-			glDrawArrays(GL_TRIANGLES, 0, 36);
+		if (!menu) {
+			glDrawArrays(GL_TRIANGLES, 0, VERTICES_PER_CUBE * blocksPerChunk * numChunks);
+			//glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 		}
-		//glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-
 		glfwSwapBuffers(window);
 		glfwPollEvents();
 	}
@@ -256,34 +282,47 @@ void processInput(GLFWwindow *window) {
 	if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
 		glfwSetWindowShouldClose(window, GLFW_TRUE);
 
-	// Movement.
-	double currentTime = glfwGetTime();
-	double deltaTime = (currentTime - lastTime);
+	// Menu. Currently only mouse toggle.
+	if (menu) {
+		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+	} else {
 
-	const float cameraSpeed = speed *  deltaTime;
-	if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-		glm_vec3_muladds(cameraFront, cameraSpeed, cameraPos);
-	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-		glm_vec3_muladds(cameraFront, -cameraSpeed, cameraPos);
-	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-		vec3 right;
-		glm_vec3_cross(cameraFront, cameraUp, right);
-		glm_vec3_normalize(right);
-		glm_vec3_muladds(right, -cameraSpeed, cameraPos);
-	}
-	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-		vec3 right;
-		glm_vec3_cross(cameraFront, cameraUp, right);
-		glm_vec3_normalize(right);
-		glm_vec3_muladds(right, cameraSpeed, cameraPos);
-	}
+		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
-	glm_vec3_add(cameraPos, cameraFront, cameraDirection);
-	glm_lookat(cameraPos, cameraDirection, cameraUp, view);
+		// Movement.
+		double currentTime = glfwGetTime();
+		double deltaTime = (currentTime - lastTime);
+
+		float cameraSpeed = speed *  deltaTime;
+		if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
+			if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) cameraSpeed *= 2;
+			glm_vec3_muladds(cameraFront, cameraSpeed, cameraPos);
+		}
+		if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
+			if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) cameraSpeed *= 2;
+			glm_vec3_muladds(cameraFront, -cameraSpeed, cameraPos);
+		}
+		if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
+			vec3 right;
+			glm_vec3_cross(cameraFront, cameraUp, right);
+			glm_vec3_normalize(right);
+			glm_vec3_muladds(right, -cameraSpeed, cameraPos);
+		}
+		if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
+			vec3 right;
+			glm_vec3_cross(cameraFront, cameraUp, right);
+			glm_vec3_normalize(right);
+			glm_vec3_muladds(right, cameraSpeed, cameraPos);
+		}
+
+		glm_vec3_add(cameraPos, cameraFront, cameraDirection);
+		glm_lookat(cameraPos, cameraDirection, cameraUp, view);
+	}
 
 }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+	(void)window;
 	glViewport(0, 0, width, height);
 }
 
@@ -298,6 +337,7 @@ void showDeltaTime(GLFWwindow* window) {
 }
 
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
+	(void)window;
 	if (firstMouse)
 	{
 		lastX = xpos;
@@ -366,3 +406,86 @@ const char* getShaderSource(const char* name) {
 	return text;
 }
 
+void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
+	(void)window;
+	scancode++; mods++; // Silence warning.
+
+	// Toggle menu (currently black screen) and mouse.
+	// Can use to go fullscreen.
+	if (key == GLFW_KEY_1 && action == GLFW_PRESS) {
+		menuLastState = menuThisState;
+		menuThisState = true;
+	} else menuThisState = false;
+	if (menuLastState != menuThisState) menu = (menu == true) ? false : true;
+
+	// Toggle wireframe.
+	if (key == GLFW_KEY_2 && action == GLFW_PRESS) {
+		wireLastState = wireThisState;
+		wireThisState = true;
+	} else wireThisState = false;
+	if (wireLastState != wireThisState) wire = (wire == true) ? false : true;
+}
+
+void addChunk(float* dst, unsigned int chunkIndex, unsigned int offset[3]) {
+	for (unsigned int x = 0; x < chunkSize; x++) {
+		for (unsigned int y = 0; y < chunkSize; y++) {
+			for (unsigned int z = 0; z < chunkSize; z++) {
+				unsigned int localIndex = x * chunkSize * chunkSize + y * chunkSize + z;
+				unsigned int globalIndex = chunkIndex * chunkSize * chunkSize * chunkSize + localIndex;
+
+				float offsetCube[3] = {(float)(x + offset[0] * chunkSize), (float)(y + offset[1] * chunkSize), (float)(z + offset[2] * chunkSize)};
+
+				addCube(dst, offsetCube, globalIndex);
+			}
+		}
+	}
+	//	bool emptyOrNot[chunkSize][chunkSize][chunkSize];
+	//	for(unsigned int x = 0; x < chunkSize; x++) {
+	//		for(unsigned int y = 0; y < chunkSize; y++) {
+	//			for(unsigned int z = 0; z < chunkSize; z++) {
+	//				emptyOrNot[x][y][z] = 0;
+	//			}
+//		}
+//	}
+//	emptyOrNot[1][1][1] = 1;
+//	emptyOrNot[0][5][1] = 1;
+//	emptyOrNot[3][7][5] = 1;
+//	emptyOrNot[4][7][4] = 1;
+//	emptyOrNot[6][2][1] = 1;
+//	emptyOrNot[1][2][8] = 1;
+
+	// Number of voxels per chunk.
+//		for(unsigned int x = 0; x < chunkSize; x++) {
+//			for(unsigned int y = 0; y < chunkSize; y++) {
+//				for(unsigned int z = 0; z < chunkSize; z++) {
+//					//if (emptyOrNot[x][y][z] != 1) continue;
+//					mat4 model;
+//					glm_mat4_identity(model);
+//					vec3 cur = {x + chunkSize * offset[0], y + chunkSize * offset[1], z + chunkSize * offset[2]};
+//
+//					glm_translate(model, cur);
+//					//glm_rotate(model, (float)glfwGetTime(), yAxis);
+//					//glm_mat4_mul(view, model, mvp);
+//					//glm_mat4_mul(proj, mvp, mvp);
+//
+//					unsigned int modelLoc = glGetUniformLocation(shaderProgram, "model");
+//					glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const float*)model);
+//
+//					glDrawArrays(GL_TRIANGLES, 0, 36);
+//				}
+//			}
+//		}
+}
+
+void addCube(float* dst, float offset[3], int index) {
+    for (int i = 0; i < VERTICES_PER_CUBE; ++i) {
+        int srcIndex = i * VERTEX_SIZE;
+        int dstIndex = index * VERTICES_PER_CUBE * VERTEX_SIZE + srcIndex;
+
+        dst[dstIndex + 0] = vertices[srcIndex + 0] + offset[0];
+        dst[dstIndex + 1] = vertices[srcIndex + 1] + offset[1];
+        dst[dstIndex + 2] = vertices[srcIndex + 2] + offset[2];
+        dst[dstIndex + 3] = vertices[srcIndex + 3]; // u
+        dst[dstIndex + 4] = vertices[srcIndex + 4]; // v
+    }
+}

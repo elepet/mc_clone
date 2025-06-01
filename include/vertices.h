@@ -3,43 +3,46 @@
 #ifndef VERTICES_H
 #define VERTICES_H
 
+int VERTICES_PER_CUBE = 36;
+int VERTEX_SIZE = 5;
+
 float vertices[] = { // CCW winding.
-		     // Back face.
+	// Back face.
 	-0.5f, -0.5f, -0.5f,  0.0f, 0.0f, // Bottom-left
 	0.5f,  0.5f, -0.5f,  1.0f, 1.0f, // top-right
 	0.5f, -0.5f, -0.5f,  1.0f, 0.0f, // bottom-right         
 	0.5f,  0.5f, -0.5f,  1.0f, 1.0f, // top-right
 	-0.5f, -0.5f, -0.5f,  0.0f, 0.0f, // bottom-left
 	-0.5f,  0.5f, -0.5f,  0.0f, 1.0f, // top-left
-					  // Front face
+	// Front face
 	-0.5f, -0.5f,  0.5f,  0.0f, 0.0f, // bottom-left
 	0.5f, -0.5f,  0.5f,  1.0f, 0.0f, // bottom-right
 	0.5f,  0.5f,  0.5f,  1.0f, 1.0f, // top-right
 	0.5f,  0.5f,  0.5f,  1.0f, 1.0f, // top-right
 	-0.5f,  0.5f,  0.5f,  0.0f, 1.0f, // top-left
 	-0.5f, -0.5f,  0.5f,  0.0f, 0.0f, // bottom-left
-					  // Left face
+	// Left face
 	-0.5f,  0.5f,  0.5f,  1.0f, 0.0f, // top-right
 	-0.5f,  0.5f, -0.5f,  1.0f, 1.0f, // top-left
 	-0.5f, -0.5f, -0.5f,  0.0f, 1.0f, // bottom-left
 	-0.5f, -0.5f, -0.5f,  0.0f, 1.0f, // bottom-left
 	-0.5f, -0.5f,  0.5f,  0.0f, 0.0f, // bottom-right
 	-0.5f,  0.5f,  0.5f,  1.0f, 0.0f, // top-right
-					  // Right face
+	// Right face
 	0.5f,  0.5f,  0.5f,  1.0f, 0.0f, // top-left
 	0.5f, -0.5f, -0.5f,  0.0f, 1.0f, // bottom-right
 	0.5f,  0.5f, -0.5f,  1.0f, 1.0f, // top-right         
 	0.5f, -0.5f, -0.5f,  0.0f, 1.0f, // bottom-right
 	0.5f,  0.5f,  0.5f,  1.0f, 0.0f, // top-left
 	0.5f, -0.5f,  0.5f,  0.0f, 0.0f, // bottom-left     
-					 // Bottom face
+	// Bottom face
 	-0.5f, -0.5f, -0.5f,  0.0f, 1.0f, // top-right
 	0.5f, -0.5f, -0.5f,  1.0f, 1.0f, // top-left
 	0.5f, -0.5f,  0.5f,  1.0f, 0.0f, // bottom-left
 	0.5f, -0.5f,  0.5f,  1.0f, 0.0f, // bottom-left
 	-0.5f, -0.5f,  0.5f,  0.0f, 0.0f, // bottom-right
 	-0.5f, -0.5f, -0.5f,  0.0f, 1.0f, // top-right
-					  // Top face
+	// Top face
 	-0.5f,  0.5f, -0.5f,  0.0f, 1.0f, // top-left
 	0.5f,  0.5f,  0.5f,  1.0f, 0.0f, // bottom-right
 	0.5f,  0.5f, -0.5f,  1.0f, 1.0f, // top-right     
