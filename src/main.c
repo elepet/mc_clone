@@ -1,4 +1,4 @@
-// TODO: chunks, texture atlas, culling, up/down camera, pbr.
+// TODO: infinite chunks, chunk culling, up/down camera, pbr.
 
 #define GL_SILENCE_DEPRECATION
 #define GLAD_GL_IMPLEMENTATION
@@ -39,22 +39,11 @@ bool firstMouse = true;
 const float sensitivity = 0.1f;
 float speed = 10;
 
-vec3 cubePos[10] = {
-    {0.0f,  0.0f,  0.0f}, 
-    {2.0f,  5.0f, -15.0f}, 
-    {-1.5f, -2.2f, -2.5f},  
-    {-3.8f, -2.0f, -12.3f},  
-    {2.4f, -0.4f, -3.5f},  
-    {-1.7f,  3.0f, -7.5f},  
-    {1.3f, -2.0f, -2.5f},  
-    {1.5f,  2.0f, -2.5f}, 
-    {1.5f,  0.2f, -1.5f}, 
-    {-1.3f,  1.0f, -1.5f}  
-};
-
 double lastX = SCR_WIDTH / 2;
 double lastY = SCR_HEIGHT / 2;
 double deltaX, deltaY;
+
+int atlasSize;
 
 // Helpers.
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
@@ -65,6 +54,7 @@ const char* getShaderSource(const char* name);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 void addChunk(float* dst, unsigned int chunkIndex, unsigned int offset[3]);
 void addCube(float* dst, float offset[3], int index);
+void getUV(enum BlockType blockType);
 
 int main() {
 	glfwInit();
@@ -141,12 +131,42 @@ int main() {
 	glDeleteShader(vertexShader);
 	glDeleteShader(fragmentShader);
 
+
+	// Texture setup.
+	unsigned int texture;
+
+	glGenTextures(1, &texture);
+	glBindTexture(GL_TEXTURE_2D, texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	int width, height, nrChannels;
+	unsigned char *data = stbi_load("../media/atlas.png", &width, &height, &nrChannels, 0);
+	if (width != height) printf("ERROR: Texture atlas not square\n");
+	else atlasSize = width;
+//	printf("%i\n", atlasSize);
+	if (data) {
+		unsigned int format = nrChannels == 4 ? GL_RGBA : GL_RGB;
+		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, format, GL_UNSIGNED_BYTE, data);
+		glGenerateMipmap(GL_TEXTURE_2D);
+	}
+	else
+	{
+		printf("ERROR: Failed to load texture\n");
+	}
+	stbi_image_free(data);
+
+	// Vertices setup.	
 	glGenVertexArrays(1, &VAO);
 	glGenBuffers(1, &VBO);
 	//glGenBuffers(1, &EBO);
 
 	glBindVertexArray(VAO);
 
+	//float vertices[VERTEX_SIZE * VERTICES_PER_CUBE];// CCW winding.
+	//printf("size: %lu\n", sizeof(vertices));
+	//getUV(STONE, vertices);
 	glBindBuffer(GL_ARRAY_BUFFER, VBO);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
@@ -159,28 +179,6 @@ int main() {
 	// Texture coord attribute.
 	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
 	glEnableVertexAttribArray(1);
-
-	// Texture setup.
-	unsigned int texture;
-
-	glGenTextures(1, &texture);
-	glBindTexture(GL_TEXTURE_2D, texture);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-	int width, height, nrChannels;
-	unsigned char *data = stbi_load("../media/dirt.png", &width, &height, &nrChannels, 0);
-	if (data)
-	{
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, data);
-		glGenerateMipmap(GL_TEXTURE_2D);
-	}
-	else
-	{
-		printf("ERROR: Failed to load texture\n");
-	}
-	stbi_image_free(data);
 
 	// Matrix setup.
 	// Model: object -> world.
@@ -214,6 +212,7 @@ int main() {
 	unsigned int blocksPerChunk = chunkSize * chunkSize * chunkSize;
 	unsigned int totalVerticesSize = sizeof(float) * VERTEX_SIZE * VERTICES_PER_CUBE * blocksPerChunk * numChunks;
 	float* combinedVertices = malloc(totalVerticesSize);
+
 	for (unsigned int cx = 0; cx < chunksInAxis[0]; cx++) {
 		for (unsigned int cy = 0; cy < chunksInAxis[1]; cy++) {
 			for (unsigned int cz = 0; cz < chunksInAxis[2]; cz++) {
@@ -427,9 +426,32 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 }
 
 void addChunk(float* dst, unsigned int chunkIndex, unsigned int offset[3]) {
+	char infoPerChunk[chunkSize][chunkSize][chunkSize];
+	for(unsigned int x = 0; x < chunkSize; x++) {
+		for(unsigned int y = 0; y < chunkSize; y++) {
+			for(unsigned int z = 0; z < chunkSize; z++) {
+				infoPerChunk[x][y][z] = AIR;
+			}
+		}
+	}
+	infoPerChunk[1][1][1] = DIRT;
+	infoPerChunk[0][5][1] = DIRT;
+	infoPerChunk[3][7][5] = GRASS;
+	infoPerChunk[4][7][4] = GRASS;
+	infoPerChunk[6][2][1] = STONE;
+	infoPerChunk[1][2][8] = STONE;
+
 	for (unsigned int x = 0; x < chunkSize; x++) {
 		for (unsigned int y = 0; y < chunkSize; y++) {
 			for (unsigned int z = 0; z < chunkSize; z++) {
+				if (infoPerChunk[x][y][z] == AIR) continue;
+				switch (infoPerChunk[x][y][z]) {
+					case DIRT: getUV(DIRT); break;
+					case GRASS: getUV(GRASS); break;
+					case STONE: getUV(STONE); break;
+					default: break;
+					
+				}
 				unsigned int localIndex = x * chunkSize * chunkSize + y * chunkSize + z;
 				unsigned int globalIndex = chunkIndex * chunkSize * chunkSize * chunkSize + localIndex;
 
@@ -439,42 +461,6 @@ void addChunk(float* dst, unsigned int chunkIndex, unsigned int offset[3]) {
 			}
 		}
 	}
-	//	bool emptyOrNot[chunkSize][chunkSize][chunkSize];
-	//	for(unsigned int x = 0; x < chunkSize; x++) {
-	//		for(unsigned int y = 0; y < chunkSize; y++) {
-	//			for(unsigned int z = 0; z < chunkSize; z++) {
-	//				emptyOrNot[x][y][z] = 0;
-	//			}
-//		}
-//	}
-//	emptyOrNot[1][1][1] = 1;
-//	emptyOrNot[0][5][1] = 1;
-//	emptyOrNot[3][7][5] = 1;
-//	emptyOrNot[4][7][4] = 1;
-//	emptyOrNot[6][2][1] = 1;
-//	emptyOrNot[1][2][8] = 1;
-
-	// Number of voxels per chunk.
-//		for(unsigned int x = 0; x < chunkSize; x++) {
-//			for(unsigned int y = 0; y < chunkSize; y++) {
-//				for(unsigned int z = 0; z < chunkSize; z++) {
-//					//if (emptyOrNot[x][y][z] != 1) continue;
-//					mat4 model;
-//					glm_mat4_identity(model);
-//					vec3 cur = {x + chunkSize * offset[0], y + chunkSize * offset[1], z + chunkSize * offset[2]};
-//
-//					glm_translate(model, cur);
-//					//glm_rotate(model, (float)glfwGetTime(), yAxis);
-//					//glm_mat4_mul(view, model, mvp);
-//					//glm_mat4_mul(proj, mvp, mvp);
-//
-//					unsigned int modelLoc = glGetUniformLocation(shaderProgram, "model");
-//					glUniformMatrix4fv(modelLoc, 1, GL_FALSE, (const float*)model);
-//
-//					glDrawArrays(GL_TRIANGLES, 0, 36);
-//				}
-//			}
-//		}
 }
 
 void addCube(float* dst, float offset[3], int index) {
@@ -488,4 +474,154 @@ void addCube(float* dst, float offset[3], int index) {
         dst[dstIndex + 3] = vertices[srcIndex + 3]; // u
         dst[dstIndex + 4] = vertices[srcIndex + 4]; // v
     }
+}
+
+void getUV(enum BlockType blockType) {
+	float tileSize = 1.0f / (atlasSize / 32.0f);
+	switch (blockType) {
+		case DIRT:
+			uMin[0] = 2 * tileSize;
+			uMax[0] = uMin[0] + tileSize;
+			vMin[0] = 0 * tileSize;
+			vMax[0] = vMin[0] + tileSize;
+
+			for (int i = 1; i < 6; i++) {
+				uMin[i] = uMin[0];
+				uMax[i] = uMax[0];
+				vMin[i] = vMin[0];
+				vMax[i] = vMax[0];
+			}
+
+			break;
+		case GRASS:
+			uMin[0] = 1 * tileSize;
+			uMax[0] = uMin[0] + tileSize;
+			vMin[0] = 0 * tileSize;
+			vMax[0] = vMin[0] + tileSize;
+
+			for (int i = 1; i < 4; i++) {
+				uMin[i] = uMin[0];
+				uMax[i] = uMax[0];
+				vMin[i] = vMin[0];
+				vMax[i] = vMax[0];
+			}
+
+			uMin[4] = 2 * tileSize;
+			uMax[4] = uMin[4] + tileSize;
+			vMin[4] = 0 * tileSize;
+			vMax[4] = vMin[4] + tileSize;
+
+			uMin[5] = 0 * tileSize;
+			uMax[5] = uMin[5] + tileSize;
+			vMin[5] = 0 * tileSize;
+			vMax[5] = vMin[5] + tileSize;
+
+			break;
+		case STONE:
+			uMin[0] = 0 * tileSize;
+			uMax[0] = uMin[0] + tileSize;
+			vMin[0] = 1 * tileSize;
+			vMax[0] = vMin[0] + tileSize;
+
+			for (int i = 1; i < 6; i++) {
+				uMin[i] = uMin[0];
+				uMax[i] = uMax[0];
+				vMin[i] = vMin[0];
+				vMax[i] = vMax[0];
+			}
+
+			break;
+		default:
+			break;
+	}
+
+	for (int i = 0; i < VERTEX_SIZE * VERTICES_PER_CUBE; i++) {
+		if (i % 5 < 3) continue;
+		switch (i) {
+			// Back face.
+			case 3: vertices[i] = uMin[0]; break;
+			case 4: vertices[i] = vMax[0]; break;
+			case 8: vertices[i] = uMax[0]; break;
+			case 9: vertices[i] = vMin[0]; break;
+			case 13: vertices[i] = uMax[0]; break;
+			case 14: vertices[i] = vMax[0]; break;
+			case 18: vertices[i] = uMax[0]; break;
+			case 19: vertices[i] = vMin[0]; break;
+			case 23: vertices[i] = uMin[0]; break;
+			case 24: vertices[i] = vMax[0]; break;
+			case 28: vertices[i] = uMin[0]; break;
+			case 29: vertices[i] = vMin[0]; break;
+
+			// Front face.
+			case 33: vertices[i] = uMin[1]; break;
+			case 34: vertices[i] = vMax[1]; break;
+			case 38: vertices[i] = uMax[1]; break;
+			case 39: vertices[i] = vMax[1]; break;
+			case 43: vertices[i] = uMax[1]; break;
+			case 44: vertices[i] = vMin[1]; break;
+			case 48: vertices[i] = uMax[1]; break;
+			case 49: vertices[i] = vMin[1]; break;
+			case 53: vertices[i] = uMin[1]; break;
+			case 54: vertices[i] = vMin[1]; break;
+			case 58: vertices[i] = uMin[1]; break;
+			case 59: vertices[i] = vMax[1]; break;
+
+			// Left face.
+			case 63: vertices[i] = uMin[2]; break;
+			case 64: vertices[i] = vMin[2]; break;
+			case 68: vertices[i] = uMax[2]; break;
+			case 69: vertices[i] = vMin[2]; break;
+			case 73: vertices[i] = uMax[2]; break;
+			case 74: vertices[i] = vMax[2]; break;
+			case 78: vertices[i] = uMax[2]; break;
+			case 79: vertices[i] = vMax[2]; break;
+			case 83: vertices[i] = uMin[2]; break;
+			case 84: vertices[i] = vMax[2]; break;
+			case 88: vertices[i] = uMin[2]; break;
+			case 89: vertices[i] = vMin[2]; break;
+
+			// Right face.
+			case 93: vertices[i] = uMin[3]; break;
+			case 94: vertices[i] = vMin[3]; break;
+			case 98: vertices[i] = uMax[3]; break;
+			case 99: vertices[i] = vMax[3]; break;
+			case 103: vertices[i] = uMax[3]; break;
+			case 104: vertices[i] = vMin[3]; break;
+			case 108: vertices[i] = uMax[3]; break;
+			case 109: vertices[i] = vMax[3]; break;
+			case 113: vertices[i] = uMin[3]; break;
+			case 114: vertices[i] = vMin[3]; break;
+			case 118: vertices[i] = uMin[3]; break;
+			case 119: vertices[i] = vMax[3]; break;
+
+			// Bottom face.
+			case 123: vertices[i] = uMin[4]; break;
+			case 124: vertices[i] = vMin[4]; break;
+			case 128: vertices[i] = uMax[4]; break;
+			case 129: vertices[i] = vMin[4]; break;
+			case 133: vertices[i] = uMax[4]; break;
+			case 134: vertices[i] = vMax[4]; break;
+			case 138: vertices[i] = uMax[4]; break;
+			case 139: vertices[i] = vMax[4]; break;
+			case 143: vertices[i] = uMin[4]; break;
+			case 144: vertices[i] = vMax[4]; break;
+			case 148: vertices[i] = uMin[4]; break;
+			case 149: vertices[i] = vMin[4]; break;
+
+			// Top face.
+			case 153: vertices[i] = uMin[5]; break;
+			case 154: vertices[i] = vMin[5]; break;
+			case 158: vertices[i] = uMax[5]; break;
+			case 159: vertices[i] = vMax[5]; break;
+			case 163: vertices[i] = uMax[5]; break;
+			case 164: vertices[i] = vMin[5]; break;
+			case 168: vertices[i] = uMax[5]; break;
+			case 169: vertices[i] = vMax[5]; break;
+			case 173: vertices[i] = uMin[5]; break;
+			case 174: vertices[i] = vMin[5]; break;
+			case 178: vertices[i] = uMin[5]; break;
+			case 179: vertices[i] = vMax[5]; break;
+			default: break;
+		}
+	}
 }
