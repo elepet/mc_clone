@@ -1,4 +1,4 @@
-// TODO: infinite chunks, chunk culling, up/down camera, pbr.
+// TODO: infinite chunks, chunk border culling, greedy meshing, up/down camera, other blocks, breaking/placing, pbr.
 
 #define GL_SILENCE_DEPRECATION
 #define GLAD_GL_IMPLEMENTATION
@@ -14,8 +14,24 @@
 // Settings.
 const unsigned int SCR_WIDTH = 800;
 const unsigned int SCR_HEIGHT = 600;
+int w, h;
+float aspect;
+float fov;
+float near = 0.1f;
+float far = 1000.0f;
 
-const unsigned int chunkSize = 10;
+#define chunkSize 16
+#define chunksInX 10
+#define chunksInY 5
+#define chunksInZ 10
+#define topsoilDepth 4
+#define perlinFrequency 0.02
+#define perlinAmplitude 40
+#define perlinYDisp 40
+unsigned int numChunks = chunksInX * chunksInY * chunksInZ;
+unsigned int blocksPerChunk = chunkSize * chunkSize * chunkSize;
+// World array.
+char wa[chunksInX][chunksInY][chunksInZ][chunkSize][chunkSize][chunkSize];
 
 bool menu = false;
 bool menuLastState = false;
@@ -54,7 +70,8 @@ const char* getShaderSource(const char* name);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 void addChunk(float* dst, unsigned int chunkIndex, unsigned int offset[3]);
 void addCube(float* dst, float offset[3], int index);
-void getUV(enum BlockType blockType);
+void setUV(enum BlockType blockType);
+unsigned int getHeight(int x, int z);
 
 int main() {
 	glfwInit();
@@ -81,13 +98,10 @@ int main() {
 
 	gladLoadGL(glfwGetProcAddress);
 
-	glEnable(GL_DEPTH_TEST);
-
-	glEnable(GL_CULL_FACE);
-
 	// Default is CCW winding.
+	glEnable(GL_DEPTH_TEST);
+	glEnable(GL_CULL_FACE);
 	glFrontFace(GL_CCW);
-
 	glCullFace(GL_BACK);  
 
 	const char* vertexShaderSource = getShaderSource("vertex_shader.txt");
@@ -139,7 +153,7 @@ int main() {
 	glBindTexture(GL_TEXTURE_2D, texture);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 	int width, height, nrChannels;
 	unsigned char *data = stbi_load("../media/atlas.png", &width, &height, &nrChannels, 0);
@@ -164,9 +178,6 @@ int main() {
 
 	glBindVertexArray(VAO);
 
-	//float vertices[VERTEX_SIZE * VERTICES_PER_CUBE];// CCW winding.
-	//printf("size: %lu\n", sizeof(vertices));
-	//getUV(STONE, vertices);
 	glBindBuffer(GL_ARRAY_BUFFER, VBO);
 	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
@@ -189,12 +200,14 @@ int main() {
 	glm_vec3_add(cameraPos, cameraFront, cameraDirection);
 	glm_lookat(cameraPos, cameraDirection, cameraUp, view);
 	// Projection: camera -> screen.
-	float fov = glm_rad(45.0f);
-	int w, h;
+//	float fov = glm_rad(45.0f);
+//	glfwGetWindowSize(window, &w, &h);
+//	aspect = (float)w / (float)h;
+//	float near = 0.1f;
+//	float far = 1000.0f;
+	fov = glm_rad(45.0f);
 	glfwGetWindowSize(window, &w, &h);
-	float aspect = (float)w / (float)h;
-	float near = 0.1f;
-	float far = 100.0f;
+	aspect = (float)w / (float)h;
 	glm_perspective(fov, aspect, near, far, proj);
 	// mvp = proj * view * model.
 //	glm_mat4_mul(view, model, mvp);
@@ -207,18 +220,15 @@ int main() {
 	glfwSetCursorPosCallback(window, mouse_callback);
 	
 	// Mesh batching setup.
-	unsigned int chunksInAxis[3] = {10, 2, 10};
-	unsigned int numChunks = chunksInAxis[0] * chunksInAxis[1] * chunksInAxis[2];
-	unsigned int blocksPerChunk = chunkSize * chunkSize * chunkSize;
 	unsigned int totalVerticesSize = sizeof(float) * VERTEX_SIZE * VERTICES_PER_CUBE * blocksPerChunk * numChunks;
 	float* combinedVertices = malloc(totalVerticesSize);
 
-	for (unsigned int cx = 0; cx < chunksInAxis[0]; cx++) {
-		for (unsigned int cy = 0; cy < chunksInAxis[1]; cy++) {
-			for (unsigned int cz = 0; cz < chunksInAxis[2]; cz++) {
-				unsigned int chunkIndex = cx * chunksInAxis[1] * chunksInAxis[2] + cy * chunksInAxis[2] + cz;
-				unsigned int offset[3] = {cx, cy, cz};
-				addChunk(combinedVertices, chunkIndex, offset);
+	for (unsigned int cx = 0; cx < chunksInX; cx++) {
+		for (unsigned int cy = 0; cy < chunksInY; cy++) {
+			for (unsigned int cz = 0; cz < chunksInZ; cz++) {
+				unsigned int chunkIndex = cx * chunksInY * chunksInZ + cy * chunksInZ + cz;
+				unsigned int o[3] = {cx, cy, cz};
+				addChunk(combinedVertices, chunkIndex, o);
 			}
 		}
 	}
@@ -284,6 +294,9 @@ void processInput(GLFWwindow *window) {
 	// Menu. Currently only mouse toggle.
 	if (menu) {
 		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+		glfwGetWindowSize(window, &w, &h);
+		aspect = (float)w / (float)h;
+		glm_perspective(fov, aspect, near, far, proj);
 	} else {
 
 		glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
@@ -425,58 +438,76 @@ void key_callback(GLFWwindow* window, int key, int scancode, int action, int mod
 	if (wireLastState != wireThisState) wire = (wire == true) ? false : true;
 }
 
-void addChunk(float* dst, unsigned int chunkIndex, unsigned int offset[3]) {
-	char infoPerChunk[chunkSize][chunkSize][chunkSize];
-	for(unsigned int x = 0; x < chunkSize; x++) {
-		for(unsigned int y = 0; y < chunkSize; y++) {
-			for(unsigned int z = 0; z < chunkSize; z++) {
-				infoPerChunk[x][y][z] = AIR;
+void addChunk(float* dst, unsigned int chunkIndex, unsigned int o[3]) {
+	for (int x = 0; x < chunkSize; x++) {
+		for (int y = 0; y < chunkSize; y++) {
+			for (int z = 0; z < chunkSize; z++) {
+				int globalX = x + chunkSize * o[0];
+				int globalY = y + chunkSize * o[1];
+				int globalZ = z + chunkSize * o[2];
+
+				int h = getHeight(globalX, globalZ);
+
+				if (globalY > h) {
+					wa[o[0]][o[1]][o[2]][x][y][z] = AIR;
+				} else if (globalY == h) {
+					wa[o[0]][o[1]][o[2]][x][y][z] = GRASS;
+				} else if (globalY >= h - topsoilDepth + 1) {
+					wa[o[0]][o[1]][o[2]][x][y][z] = DIRT;
+				} else {
+					wa[o[0]][o[1]][o[2]][x][y][z] = STONE;
+				}
 			}
 		}
 	}
-	infoPerChunk[1][1][1] = DIRT;
-	infoPerChunk[0][5][1] = DIRT;
-	infoPerChunk[3][7][5] = GRASS;
-	infoPerChunk[4][7][4] = GRASS;
-	infoPerChunk[6][2][1] = STONE;
-	infoPerChunk[1][2][8] = STONE;
 
-	for (unsigned int x = 0; x < chunkSize; x++) {
-		for (unsigned int y = 0; y < chunkSize; y++) {
-			for (unsigned int z = 0; z < chunkSize; z++) {
-				if (infoPerChunk[x][y][z] == AIR) continue;
-				switch (infoPerChunk[x][y][z]) {
-					case DIRT: getUV(DIRT); break;
-					case GRASS: getUV(GRASS); break;
-					case STONE: getUV(STONE); break;
+
+	// Fill all chunks with stone.
+ 	//memset(infoPerChunk, STONE, sizeof(infoPerChunk));
+
+	for (int x = 0; x < chunkSize; x++) {
+		for (int y = 0; y < chunkSize; y++) {
+			for (int z = 0; z < chunkSize; z++) {
+				if (wa[o[0]][o[1]][o[2]][x][y][z] == AIR) continue;
+				if (x <= chunkSize - 2 && x > 0 && y <= chunkSize - 2 && y > 0 && z <= chunkSize - 2 && z > 0 &&
+					wa[o[0]][o[1]][o[2]][x + 1][y][z] != AIR && 
+					wa[o[0]][o[1]][o[2]][x - 1][y][z] != AIR &&
+					wa[o[0]][o[1]][o[2]][x][y + 1][z] != AIR &&
+					wa[o[0]][o[1]][o[2]][x][y - 1][z] != AIR &&
+					wa[o[0]][o[1]][o[2]][x][y][z + 1] != AIR &&
+					wa[o[0]][o[1]][o[2]][x][y][z - 1] != AIR) continue;
+				switch (wa[o[0]][o[1]][o[2]][x][y][z]) {
+					case DIRT: setUV(DIRT); break;
+					case GRASS: setUV(GRASS); break;
+					case STONE: setUV(STONE); break;
 					default: break;
 					
 				}
 				unsigned int localIndex = x * chunkSize * chunkSize + y * chunkSize + z;
 				unsigned int globalIndex = chunkIndex * chunkSize * chunkSize * chunkSize + localIndex;
 
-				float offsetCube[3] = {(float)(x + offset[0] * chunkSize), (float)(y + offset[1] * chunkSize), (float)(z + offset[2] * chunkSize)};
+				float oCube[3] = {(float)(x + o[0] * chunkSize), (float)(y + o[1] * chunkSize), (float)(z + o[2] * chunkSize)};
 
-				addCube(dst, offsetCube, globalIndex);
+				addCube(dst, oCube, globalIndex);
 			}
 		}
 	}
 }
 
-void addCube(float* dst, float offset[3], int index) {
+void addCube(float* dst, float o[3], int index) {
     for (int i = 0; i < VERTICES_PER_CUBE; ++i) {
         int srcIndex = i * VERTEX_SIZE;
         int dstIndex = index * VERTICES_PER_CUBE * VERTEX_SIZE + srcIndex;
 
-        dst[dstIndex + 0] = vertices[srcIndex + 0] + offset[0];
-        dst[dstIndex + 1] = vertices[srcIndex + 1] + offset[1];
-        dst[dstIndex + 2] = vertices[srcIndex + 2] + offset[2];
+        dst[dstIndex + 0] = vertices[srcIndex + 0] + o[0];
+        dst[dstIndex + 1] = vertices[srcIndex + 1] + o[1];
+        dst[dstIndex + 2] = vertices[srcIndex + 2] + o[2];
         dst[dstIndex + 3] = vertices[srcIndex + 3]; // u
         dst[dstIndex + 4] = vertices[srcIndex + 4]; // v
     }
 }
 
-void getUV(enum BlockType blockType) {
+void setUV(enum BlockType blockType) {
 	float tileSize = 1.0f / (atlasSize / 32.0f);
 	switch (blockType) {
 		case DIRT:
@@ -624,4 +655,11 @@ void getUV(enum BlockType blockType) {
 			default: break;
 		}
 	}
+}
+
+unsigned int getHeight(int x, int z) {
+	vec3 pos = {(float)x, 0.0f, (float)z};
+	glm_vec3_scale(pos, perlinFrequency, pos);
+	float noise = glm_perlin_vec3(pos);
+	return (unsigned int)((noise + 1.0f) * 0.5f * perlinAmplitude + perlinYDisp);
 }
