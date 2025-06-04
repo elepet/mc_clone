@@ -1,4 +1,4 @@
-// TODO: infinite chunks, chunk border culling, greedy meshing, up/down camera, other blocks, breaking/placing, pbr.
+// TODO: infinite chunks, UV lookup, chunk border culling, greedy meshing, world saving/seeds, gui, fog, biomes, up/down camera, other blocks, breaking/placing, vertex data optimisation, checks per face, multithreading, multiplayer, pbr.
 
 #define GL_SILENCE_DEPRECATION
 #define GLAD_GL_IMPLEMENTATION
@@ -20,6 +20,19 @@ float fov;
 float near = 0.1f;
 float far = 1000.0f;
 
+#define VERTEX_SIZE 5
+#define VERTICES_PER_BLOCK 36
+#define DATA_PER_BLOCK 180
+
+float uMin[6], uMax[6], vMin[6], vMax[6];
+
+enum BlockType {
+	AIR,
+	DIRT,
+	GRASS,
+	STONE
+};
+
 #define chunkSize 16
 #define chunksInX 10
 #define chunksInY 5
@@ -28,10 +41,15 @@ float far = 1000.0f;
 #define perlinFrequency 0.02
 #define perlinAmplitude 40
 #define perlinYDisp 40
+#define renderDist 500
 unsigned int numChunks = chunksInX * chunksInY * chunksInZ;
 unsigned int blocksPerChunk = chunkSize * chunkSize * chunkSize;
 // World array.
 char wa[chunksInX][chunksInY][chunksInZ][chunkSize][chunkSize][chunkSize];
+int atlasSize;
+#define numBlockTypes 4 // Including AIR.
+// Vertex array array.
+float vaa[numBlockTypes][DATA_PER_BLOCK];
 
 bool menu = false;
 bool menuLastState = false;
@@ -59,8 +77,6 @@ double lastX = SCR_WIDTH / 2;
 double lastY = SCR_HEIGHT / 2;
 double deltaX, deltaY;
 
-int atlasSize;
-
 // Helpers.
 void framebuffer_size_callback(GLFWwindow* window, int width, int height);
 static void mouse_callback(GLFWwindow* window, double xpos, double ypos);
@@ -69,8 +85,9 @@ void showDeltaTime(GLFWwindow* window);
 const char* getShaderSource(const char* name);
 void key_callback(GLFWwindow* window, int key, int scancode, int action, int mods);
 void addChunk(float* dst, unsigned int chunkIndex, unsigned int offset[3]);
-void addCube(float* dst, float offset[3], int index);
-void setUV(enum BlockType blockType);
+void addCube(float* dst, float offset[3], int index, enum BlockType curBT);
+void writeBlockTypeBin(enum BlockType blockType);
+int readBlockTypeBin(enum BlockType blockType);
 unsigned int getHeight(int x, int z);
 
 int main() {
@@ -159,7 +176,6 @@ int main() {
 	unsigned char *data = stbi_load("../media/atlas.png", &width, &height, &nrChannels, 0);
 	if (width != height) printf("ERROR: Texture atlas not square\n");
 	else atlasSize = width;
-//	printf("%i\n", atlasSize);
 	if (data) {
 		unsigned int format = nrChannels == 4 ? GL_RGBA : GL_RGB;
 		glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, format, GL_UNSIGNED_BYTE, data);
@@ -171,26 +187,6 @@ int main() {
 	}
 	stbi_image_free(data);
 
-	// Vertices setup.	
-	glGenVertexArrays(1, &VAO);
-	glGenBuffers(1, &VBO);
-	//glGenBuffers(1, &EBO);
-
-	glBindVertexArray(VAO);
-
-	glBindBuffer(GL_ARRAY_BUFFER, VBO);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-	//glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, EBO);
-	//glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
-
-	// Position attribute.
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
-	glEnableVertexAttribArray(0);
-	// Texture coord attribute.
-	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
-	glEnableVertexAttribArray(1);
-
 	// Matrix setup.
 	// Model: object -> world.
 	glm_mat4_identity(model);
@@ -200,18 +196,10 @@ int main() {
 	glm_vec3_add(cameraPos, cameraFront, cameraDirection);
 	glm_lookat(cameraPos, cameraDirection, cameraUp, view);
 	// Projection: camera -> screen.
-//	float fov = glm_rad(45.0f);
-//	glfwGetWindowSize(window, &w, &h);
-//	aspect = (float)w / (float)h;
-//	float near = 0.1f;
-//	float far = 1000.0f;
 	fov = glm_rad(45.0f);
 	glfwGetWindowSize(window, &w, &h);
 	aspect = (float)w / (float)h;
 	glm_perspective(fov, aspect, near, far, proj);
-	// mvp = proj * view * model.
-//	glm_mat4_mul(view, model, mvp);
-//	glm_mat4_mul(proj, mvp, mvp); 
 
 	// Time setup.
 	lastTime = glfwGetTime();
@@ -220,7 +208,8 @@ int main() {
 	glfwSetCursorPosCallback(window, mouse_callback);
 	
 	// Mesh batching setup.
-	unsigned int totalVerticesSize = sizeof(float) * VERTEX_SIZE * VERTICES_PER_CUBE * blocksPerChunk * numChunks;
+	for (int i = 1; i < numBlockTypes; i++) readBlockTypeBin(i);
+	unsigned int totalVerticesSize = sizeof(float) * DATA_PER_BLOCK * blocksPerChunk * numChunks;
 	float* combinedVertices = malloc(totalVerticesSize);
 
 	for (unsigned int cx = 0; cx < chunksInX; cx++) {
@@ -233,8 +222,19 @@ int main() {
 		}
 	}
 
+	// Vertices setup.	
+	glGenVertexArrays(1, &VAO);
+	glGenBuffers(1, &VBO);
+	glBindVertexArray(VAO);
 	glBindBuffer(GL_ARRAY_BUFFER, VBO);
 	glBufferData(GL_ARRAY_BUFFER, totalVerticesSize, combinedVertices, GL_STATIC_DRAW);
+	// Position attribute.
+	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+	glEnableVertexAttribArray(0);
+	// Texture coord attribute.
+	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+	glEnableVertexAttribArray(1);
+
 	free(combinedVertices);
 
 	// Render loop.
@@ -263,7 +263,7 @@ int main() {
 		else glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
 		if (!menu) {
-			glDrawArrays(GL_TRIANGLES, 0, VERTICES_PER_CUBE * blocksPerChunk * numChunks);
+			glDrawArrays(GL_TRIANGLES, 0, VERTICES_PER_BLOCK * blocksPerChunk * numChunks);
 			//glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
 		}
 		glfwSwapBuffers(window);
@@ -465,6 +465,8 @@ void addChunk(float* dst, unsigned int chunkIndex, unsigned int o[3]) {
 	// Fill all chunks with stone.
  	//memset(infoPerChunk, STONE, sizeof(infoPerChunk));
 
+	enum BlockType curBT;
+	
 	for (int x = 0; x < chunkSize; x++) {
 		for (int y = 0; y < chunkSize; y++) {
 			for (int z = 0; z < chunkSize; z++) {
@@ -477,9 +479,9 @@ void addChunk(float* dst, unsigned int chunkIndex, unsigned int o[3]) {
 					wa[o[0]][o[1]][o[2]][x][y][z + 1] != AIR &&
 					wa[o[0]][o[1]][o[2]][x][y][z - 1] != AIR) continue;
 				switch (wa[o[0]][o[1]][o[2]][x][y][z]) {
-					case DIRT: setUV(DIRT); break;
-					case GRASS: setUV(GRASS); break;
-					case STONE: setUV(STONE); break;
+					case DIRT: curBT = DIRT; break;
+					case GRASS: curBT = GRASS; break;
+					case STONE: curBT = STONE; break;
 					default: break;
 					
 				}
@@ -488,27 +490,178 @@ void addChunk(float* dst, unsigned int chunkIndex, unsigned int o[3]) {
 
 				float oCube[3] = {(float)(x + o[0] * chunkSize), (float)(y + o[1] * chunkSize), (float)(z + o[2] * chunkSize)};
 
-				addCube(dst, oCube, globalIndex);
+				addCube(dst, oCube, globalIndex, curBT);
 			}
 		}
 	}
 }
 
-void addCube(float* dst, float o[3], int index) {
-    for (int i = 0; i < VERTICES_PER_CUBE; ++i) {
+void addCube(float* dst, float o[3], int index, enum BlockType curBT) {
+    for (int i = 0; i < VERTICES_PER_BLOCK; ++i) {
         int srcIndex = i * VERTEX_SIZE;
-        int dstIndex = index * VERTICES_PER_CUBE * VERTEX_SIZE + srcIndex;
+        int dstIndex = index * DATA_PER_BLOCK + srcIndex;
 
-        dst[dstIndex + 0] = vertices[srcIndex + 0] + o[0];
-        dst[dstIndex + 1] = vertices[srcIndex + 1] + o[1];
-        dst[dstIndex + 2] = vertices[srcIndex + 2] + o[2];
-        dst[dstIndex + 3] = vertices[srcIndex + 3]; // u
-        dst[dstIndex + 4] = vertices[srcIndex + 4]; // v
+        dst[dstIndex + 0] = vaa[curBT][srcIndex + 0] + o[0];
+        dst[dstIndex + 1] = vaa[curBT][srcIndex + 1] + o[1];
+        dst[dstIndex + 2] = vaa[curBT][srcIndex + 2] + o[2];
+        dst[dstIndex + 3] = vaa[curBT][srcIndex + 3]; // u
+        dst[dstIndex + 4] = vaa[curBT][srcIndex + 4]; // v
     }
 }
 
-void setUV(enum BlockType blockType) {
+//void setUV(enum BlockType blockType) {
+//	float tileSize = 1.0f / (atlasSize / 32.0f);
+//	switch (blockType) {
+//		case DIRT:
+//			uMin[0] = 2 * tileSize;
+//			uMax[0] = uMin[0] + tileSize;
+//			vMin[0] = 0 * tileSize;
+//			vMax[0] = vMin[0] + tileSize;
+//
+//			for (int i = 1; i < 6; i++) {
+//				uMin[i] = uMin[0];
+//				uMax[i] = uMax[0];
+//				vMin[i] = vMin[0];
+//				vMax[i] = vMax[0];
+//			}
+//
+//			break;
+//		case GRASS:
+//			uMin[0] = 1 * tileSize;
+//			uMax[0] = uMin[0] + tileSize;
+//			vMin[0] = 0 * tileSize;
+//			vMax[0] = vMin[0] + tileSize;
+//
+//			for (int i = 1; i < 4; i++) {
+//				uMin[i] = uMin[0];
+//				uMax[i] = uMax[0];
+//				vMin[i] = vMin[0];
+//				vMax[i] = vMax[0];
+//			}
+//
+//			uMin[4] = 2 * tileSize;
+//			uMax[4] = uMin[4] + tileSize;
+//			vMin[4] = 0 * tileSize;
+//			vMax[4] = vMin[4] + tileSize;
+//
+//			uMin[5] = 0 * tileSize;
+//			uMax[5] = uMin[5] + tileSize;
+//			vMin[5] = 0 * tileSize;
+//			vMax[5] = vMin[5] + tileSize;
+//
+//			break;
+//		case STONE:
+//			uMin[0] = 0 * tileSize;
+//			uMax[0] = uMin[0] + tileSize;
+//			vMin[0] = 1 * tileSize;
+//			vMax[0] = vMin[0] + tileSize;
+//
+//			for (int i = 1; i < 6; i++) {
+//				uMin[i] = uMin[0];
+//				uMax[i] = uMax[0];
+//				vMin[i] = vMin[0];
+//				vMax[i] = vMax[0];
+//			}
+//
+//			break;
+//		default:
+//			break;
+//	}
+//
+//	for (int i = 0; i < DATA_PER_BLOCK; i++) {
+//		if (i % 5 < 3) continue;
+//		switch (i) {
+//			// Back face.
+//			case 3: vertices[i] = uMin[0]; break;
+//			case 4: vertices[i] = vMax[0]; break;
+//			case 8: vertices[i] = uMax[0]; break;
+//			case 9: vertices[i] = vMin[0]; break;
+//			case 13: vertices[i] = uMax[0]; break;
+//			case 14: vertices[i] = vMax[0]; break;
+//			case 18: vertices[i] = uMax[0]; break;
+//			case 19: vertices[i] = vMin[0]; break;
+//			case 23: vertices[i] = uMin[0]; break;
+//			case 24: vertices[i] = vMax[0]; break;
+//			case 28: vertices[i] = uMin[0]; break;
+//			case 29: vertices[i] = vMin[0]; break;
+//
+//			// Front face.
+//			case 33: vertices[i] = uMin[1]; break;
+//			case 34: vertices[i] = vMax[1]; break;
+//			case 38: vertices[i] = uMax[1]; break;
+//			case 39: vertices[i] = vMax[1]; break;
+//			case 43: vertices[i] = uMax[1]; break;
+//			case 44: vertices[i] = vMin[1]; break;
+//			case 48: vertices[i] = uMax[1]; break;
+//			case 49: vertices[i] = vMin[1]; break;
+//			case 53: vertices[i] = uMin[1]; break;
+//			case 54: vertices[i] = vMin[1]; break;
+//			case 58: vertices[i] = uMin[1]; break;
+//			case 59: vertices[i] = vMax[1]; break;
+//
+//			// Left face.
+//			case 63: vertices[i] = uMin[2]; break;
+//			case 64: vertices[i] = vMin[2]; break;
+//			case 68: vertices[i] = uMax[2]; break;
+//			case 69: vertices[i] = vMin[2]; break;
+//			case 73: vertices[i] = uMax[2]; break;
+//			case 74: vertices[i] = vMax[2]; break;
+//			case 78: vertices[i] = uMax[2]; break;
+//			case 79: vertices[i] = vMax[2]; break;
+//			case 83: vertices[i] = uMin[2]; break;
+//			case 84: vertices[i] = vMax[2]; break;
+//			case 88: vertices[i] = uMin[2]; break;
+//			case 89: vertices[i] = vMin[2]; break;
+//
+//			// Right face.
+//			case 93: vertices[i] = uMin[3]; break;
+//			case 94: vertices[i] = vMin[3]; break;
+//			case 98: vertices[i] = uMax[3]; break;
+//			case 99: vertices[i] = vMax[3]; break;
+//			case 103: vertices[i] = uMax[3]; break;
+//			case 104: vertices[i] = vMin[3]; break;
+//			case 108: vertices[i] = uMax[3]; break;
+//			case 109: vertices[i] = vMax[3]; break;
+//			case 113: vertices[i] = uMin[3]; break;
+//			case 114: vertices[i] = vMin[3]; break;
+//			case 118: vertices[i] = uMin[3]; break;
+//			case 119: vertices[i] = vMax[3]; break;
+//
+//			// Bottom face.
+//			case 123: vertices[i] = uMin[4]; break;
+//			case 124: vertices[i] = vMin[4]; break;
+//			case 128: vertices[i] = uMax[4]; break;
+//			case 129: vertices[i] = vMin[4]; break;
+//			case 133: vertices[i] = uMax[4]; break;
+//			case 134: vertices[i] = vMax[4]; break;
+//			case 138: vertices[i] = uMax[4]; break;
+//			case 139: vertices[i] = vMax[4]; break;
+//			case 143: vertices[i] = uMin[4]; break;
+//			case 144: vertices[i] = vMax[4]; break;
+//			case 148: vertices[i] = uMin[4]; break;
+//			case 149: vertices[i] = vMin[4]; break;
+//
+//			// Top face.
+//			case 153: vertices[i] = uMin[5]; break;
+//			case 154: vertices[i] = vMin[5]; break;
+//			case 158: vertices[i] = uMax[5]; break;
+//			case 159: vertices[i] = vMax[5]; break;
+//			case 163: vertices[i] = uMax[5]; break;
+//			case 164: vertices[i] = vMin[5]; break;
+//			case 168: vertices[i] = uMax[5]; break;
+//			case 169: vertices[i] = vMax[5]; break;
+//			case 173: vertices[i] = uMin[5]; break;
+//			case 174: vertices[i] = vMin[5]; break;
+//			case 178: vertices[i] = uMin[5]; break;
+//			case 179: vertices[i] = vMax[5]; break;
+//			default: break;
+//		}
+//	}
+//}
+
+void writeBlockTypeBin(enum BlockType blockType) {
 	float tileSize = 1.0f / (atlasSize / 32.0f);
+	char* fileName; 
 	switch (blockType) {
 		case DIRT:
 			uMin[0] = 2 * tileSize;
@@ -522,6 +675,8 @@ void setUV(enum BlockType blockType) {
 				vMin[i] = vMin[0];
 				vMax[i] = vMax[0];
 			}
+
+			fileName = "dirt.bin";
 
 			break;
 		case GRASS:
@@ -547,6 +702,8 @@ void setUV(enum BlockType blockType) {
 			vMin[5] = 0 * tileSize;
 			vMax[5] = vMin[5] + tileSize;
 
+			fileName = "grass.bin";
+
 			break;
 		case STONE:
 			uMin[0] = 0 * tileSize;
@@ -561,100 +718,139 @@ void setUV(enum BlockType blockType) {
 				vMax[i] = vMax[0];
 			}
 
+			fileName = "stone.bin";
+
 			break;
 		default:
 			break;
 	}
 
-	for (int i = 0; i < VERTEX_SIZE * VERTICES_PER_CUBE; i++) {
+	float arrayToFile[DATA_PER_BLOCK];
+	for (int i = 0; i < DATA_PER_BLOCK; i++) arrayToFile[i] = vertices[i];
+
+	for (int i = 0; i < DATA_PER_BLOCK; i++) {
 		if (i % 5 < 3) continue;
 		switch (i) {
 			// Back face.
-			case 3: vertices[i] = uMin[0]; break;
-			case 4: vertices[i] = vMax[0]; break;
-			case 8: vertices[i] = uMax[0]; break;
-			case 9: vertices[i] = vMin[0]; break;
-			case 13: vertices[i] = uMax[0]; break;
-			case 14: vertices[i] = vMax[0]; break;
-			case 18: vertices[i] = uMax[0]; break;
-			case 19: vertices[i] = vMin[0]; break;
-			case 23: vertices[i] = uMin[0]; break;
-			case 24: vertices[i] = vMax[0]; break;
-			case 28: vertices[i] = uMin[0]; break;
-			case 29: vertices[i] = vMin[0]; break;
+			case 3: arrayToFile[i] = uMin[0]; break;
+			case 4: arrayToFile[i] = vMax[0]; break;
+			case 8: arrayToFile[i] = uMax[0]; break;
+			case 9: arrayToFile[i] = vMin[0]; break;
+			case 13: arrayToFile[i] = uMax[0]; break;
+			case 14: arrayToFile[i] = vMax[0]; break;
+			case 18: arrayToFile[i] = uMax[0]; break;
+			case 19: arrayToFile[i] = vMin[0]; break;
+			case 23: arrayToFile[i] = uMin[0]; break;
+			case 24: arrayToFile[i] = vMax[0]; break;
+			case 28: arrayToFile[i] = uMin[0]; break;
+			case 29: arrayToFile[i] = vMin[0]; break;
 
 			// Front face.
-			case 33: vertices[i] = uMin[1]; break;
-			case 34: vertices[i] = vMax[1]; break;
-			case 38: vertices[i] = uMax[1]; break;
-			case 39: vertices[i] = vMax[1]; break;
-			case 43: vertices[i] = uMax[1]; break;
-			case 44: vertices[i] = vMin[1]; break;
-			case 48: vertices[i] = uMax[1]; break;
-			case 49: vertices[i] = vMin[1]; break;
-			case 53: vertices[i] = uMin[1]; break;
-			case 54: vertices[i] = vMin[1]; break;
-			case 58: vertices[i] = uMin[1]; break;
-			case 59: vertices[i] = vMax[1]; break;
+			case 33: arrayToFile[i] = uMin[1]; break;
+			case 34: arrayToFile[i] = vMax[1]; break;
+			case 38: arrayToFile[i] = uMax[1]; break;
+			case 39: arrayToFile[i] = vMax[1]; break;
+			case 43: arrayToFile[i] = uMax[1]; break;
+			case 44: arrayToFile[i] = vMin[1]; break;
+			case 48: arrayToFile[i] = uMax[1]; break;
+			case 49: arrayToFile[i] = vMin[1]; break;
+			case 53: arrayToFile[i] = uMin[1]; break;
+			case 54: arrayToFile[i] = vMin[1]; break;
+			case 58: arrayToFile[i] = uMin[1]; break;
+			case 59: arrayToFile[i] = vMax[1]; break;
 
 			// Left face.
-			case 63: vertices[i] = uMin[2]; break;
-			case 64: vertices[i] = vMin[2]; break;
-			case 68: vertices[i] = uMax[2]; break;
-			case 69: vertices[i] = vMin[2]; break;
-			case 73: vertices[i] = uMax[2]; break;
-			case 74: vertices[i] = vMax[2]; break;
-			case 78: vertices[i] = uMax[2]; break;
-			case 79: vertices[i] = vMax[2]; break;
-			case 83: vertices[i] = uMin[2]; break;
-			case 84: vertices[i] = vMax[2]; break;
-			case 88: vertices[i] = uMin[2]; break;
-			case 89: vertices[i] = vMin[2]; break;
+			case 63: arrayToFile[i] = uMin[2]; break;
+			case 64: arrayToFile[i] = vMin[2]; break;
+			case 68: arrayToFile[i] = uMax[2]; break;
+			case 69: arrayToFile[i] = vMin[2]; break;
+			case 73: arrayToFile[i] = uMax[2]; break;
+			case 74: arrayToFile[i] = vMax[2]; break;
+			case 78: arrayToFile[i] = uMax[2]; break;
+			case 79: arrayToFile[i] = vMax[2]; break;
+			case 83: arrayToFile[i] = uMin[2]; break;
+			case 84: arrayToFile[i] = vMax[2]; break;
+			case 88: arrayToFile[i] = uMin[2]; break;
+			case 89: arrayToFile[i] = vMin[2]; break;
 
 			// Right face.
-			case 93: vertices[i] = uMin[3]; break;
-			case 94: vertices[i] = vMin[3]; break;
-			case 98: vertices[i] = uMax[3]; break;
-			case 99: vertices[i] = vMax[3]; break;
-			case 103: vertices[i] = uMax[3]; break;
-			case 104: vertices[i] = vMin[3]; break;
-			case 108: vertices[i] = uMax[3]; break;
-			case 109: vertices[i] = vMax[3]; break;
-			case 113: vertices[i] = uMin[3]; break;
-			case 114: vertices[i] = vMin[3]; break;
-			case 118: vertices[i] = uMin[3]; break;
-			case 119: vertices[i] = vMax[3]; break;
+			case 93: arrayToFile[i] = uMin[3]; break;
+			case 94: arrayToFile[i] = vMin[3]; break;
+			case 98: arrayToFile[i] = uMax[3]; break;
+			case 99: arrayToFile[i] = vMax[3]; break;
+			case 103: arrayToFile[i] = uMax[3]; break;
+			case 104: arrayToFile[i] = vMin[3]; break;
+			case 108: arrayToFile[i] = uMax[3]; break;
+			case 109: arrayToFile[i] = vMax[3]; break;
+			case 113: arrayToFile[i] = uMin[3]; break;
+			case 114: arrayToFile[i] = vMin[3]; break;
+			case 118: arrayToFile[i] = uMin[3]; break;
+			case 119: arrayToFile[i] = vMax[3]; break;
 
 			// Bottom face.
-			case 123: vertices[i] = uMin[4]; break;
-			case 124: vertices[i] = vMin[4]; break;
-			case 128: vertices[i] = uMax[4]; break;
-			case 129: vertices[i] = vMin[4]; break;
-			case 133: vertices[i] = uMax[4]; break;
-			case 134: vertices[i] = vMax[4]; break;
-			case 138: vertices[i] = uMax[4]; break;
-			case 139: vertices[i] = vMax[4]; break;
-			case 143: vertices[i] = uMin[4]; break;
-			case 144: vertices[i] = vMax[4]; break;
-			case 148: vertices[i] = uMin[4]; break;
-			case 149: vertices[i] = vMin[4]; break;
+			case 123: arrayToFile[i] = uMin[4]; break;
+			case 124: arrayToFile[i] = vMin[4]; break;
+			case 128: arrayToFile[i] = uMax[4]; break;
+			case 129: arrayToFile[i] = vMin[4]; break;
+			case 133: arrayToFile[i] = uMax[4]; break;
+			case 134: arrayToFile[i] = vMax[4]; break;
+			case 138: arrayToFile[i] = uMax[4]; break;
+			case 139: arrayToFile[i] = vMax[4]; break;
+			case 143: arrayToFile[i] = uMin[4]; break;
+			case 144: arrayToFile[i] = vMax[4]; break;
+			case 148: arrayToFile[i] = uMin[4]; break;
+			case 149: arrayToFile[i] = vMin[4]; break;
 
 			// Top face.
-			case 153: vertices[i] = uMin[5]; break;
-			case 154: vertices[i] = vMin[5]; break;
-			case 158: vertices[i] = uMax[5]; break;
-			case 159: vertices[i] = vMax[5]; break;
-			case 163: vertices[i] = uMax[5]; break;
-			case 164: vertices[i] = vMin[5]; break;
-			case 168: vertices[i] = uMax[5]; break;
-			case 169: vertices[i] = vMax[5]; break;
-			case 173: vertices[i] = uMin[5]; break;
-			case 174: vertices[i] = vMin[5]; break;
-			case 178: vertices[i] = uMin[5]; break;
-			case 179: vertices[i] = vMax[5]; break;
+			case 153: arrayToFile[i] = uMin[5]; break;
+			case 154: arrayToFile[i] = vMin[5]; break;
+			case 158: arrayToFile[i] = uMax[5]; break;
+			case 159: arrayToFile[i] = vMax[5]; break;
+			case 163: arrayToFile[i] = uMax[5]; break;
+			case 164: arrayToFile[i] = vMin[5]; break;
+			case 168: arrayToFile[i] = uMax[5]; break;
+			case 169: arrayToFile[i] = vMax[5]; break;
+			case 173: arrayToFile[i] = uMin[5]; break;
+			case 174: arrayToFile[i] = vMin[5]; break;
+			case 178: arrayToFile[i] = uMin[5]; break;
+			case 179: arrayToFile[i] = vMax[5]; break;
 			default: break;
 		}
 	}
+	FILE* f = fopen(fileName, "wb");
+	fwrite(arrayToFile, sizeof(float), DATA_PER_BLOCK, f);
+	fclose(f);
+}
+
+int readBlockTypeBin(enum BlockType blockType) {
+	char* fileName; 
+	switch (blockType) {
+		case DIRT:
+			fileName = "dirt.bin";
+			break;
+		case GRASS:
+			fileName = "grass.bin";
+			break;
+		case STONE:
+			fileName = "stone.bin";
+			break;
+		default:
+			break;
+	}
+
+	float arrayFromFile[DATA_PER_BLOCK];
+
+	FILE* f = fopen(fileName, "rb");
+	if (!f) {
+		writeBlockTypeBin(blockType);
+		f = fopen(fileName, "rb");
+	}
+	fread(arrayFromFile, sizeof(int), DATA_PER_BLOCK, f);
+	fclose(f);
+
+	for (int i = 0; i < DATA_PER_BLOCK; i++) vaa[blockType][i] = arrayFromFile[i];
+
+	return 1;
 }
 
 unsigned int getHeight(int x, int z) {
